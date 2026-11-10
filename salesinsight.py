@@ -376,6 +376,12 @@ def formatar_reais(valor, _posicao=None):
     return f"R$ {valor:,.0f}"
 
 
+def moeda(valor):
+    """Formata no padrao brasileiro: 1380210.31 -> 'R$ 1.380.210,31'."""
+    texto = f"{valor:,.2f}"
+    return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def salvar_figura(fig, nome_arquivo, pasta=PASTA_GRAFICOS, dpi=150):
     """Ajusta o layout, salva o PNG e fecha a figura. Retorna o caminho."""
     os.makedirs(pasta, exist_ok=True)
@@ -465,3 +471,157 @@ def grafico_painel_resumo(df, metricas):
     fig.suptitle("SalesInsight PY - Painel Resumo de Vendas 2025",
                  fontsize=18, fontweight="bold", color=COR_PRINCIPAL)
     return salvar_figura(fig, "painel_resumo.png")
+
+
+# ----------------------------------------------------------------------
+# RF09 - Exportar resultados em CSV e JSON
+# ----------------------------------------------------------------------
+def exportar_resultados(metricas, clientes, estatisticas, pasta=PASTA_SAIDA):
+    """Exporta os resultados em CSV e JSON e le o JSON de volta para conferir."""
+    os.makedirs(pasta, exist_ok=True)
+
+    metricas["por_mes"].to_csv(os.path.join(pasta, "metricas_por_mes.csv"),
+                               index=False, encoding="utf-8-sig")
+    clientes.to_csv(os.path.join(pasta, "segmentacao_clientes.csv"),
+                    index=False, encoding="utf-8-sig")
+
+    # numeros do numpy viram float/int do Python para o json aceitar
+    serializavel = {}
+    for chave, valor in estatisticas.items():
+        if isinstance(valor, str):
+            serializavel[chave] = valor
+        elif isinstance(valor, (int, np.integer)):
+            serializavel[chave] = int(valor)
+        else:
+            serializavel[chave] = round(float(valor), 2)
+
+    caminho = os.path.join(pasta, "estatisticas_gerais.json")
+    with open(caminho, "w", encoding="utf-8") as f:
+        json.dump(serializavel, f, indent=4, ensure_ascii=False)
+
+    # leitura de volta para confirmar a escrita
+    with open(caminho, "r", encoding="utf-8") as f:
+        conferencia = json.load(f)
+    print("\n=== JSON GRAVADO E LIDO DE VOLTA ===")
+    for chave, valor in conferencia.items():
+        print(f"{chave}: {valor}")
+
+    return conferencia
+
+
+# ----------------------------------------------------------------------
+# Classe que organiza o fluxo de ponta a ponta
+# ----------------------------------------------------------------------
+class AnalisadorDeVendas:
+    """Guarda o estado da analise e executa cada etapa do pipeline."""
+
+    def __init__(self, pasta_saida=PASTA_SAIDA):
+        self.pasta_saida = pasta_saida
+        self.df_bruto = None
+        self.df = None
+        self.relatorio_limpeza = {}
+        self.metricas = {}
+        self.clientes = None
+        self.estatisticas = {}
+        self.graficos = []
+
+    def carregar(self, caminho_csv):
+        """Le o CSV bruto com pd.read_csv()."""
+        self.df_bruto = pd.read_csv(caminho_csv)
+        print(f"\n[1] Dataset carregado: {caminho_csv} ({len(self.df_bruto)} linhas)")
+        return self.df_bruto
+
+    def transformar(self):
+        """Limpa primeiro e so depois cria as colunas derivadas."""
+        print("\n[2] Tratamento e transformacao")
+        self.df, self.relatorio_limpeza = tratar_dados(self.df_bruto)
+        self.df = criar_colunas_derivadas(self.df)
+
+        # funcao de ordem superior com duas lambdas em contextos diferentes
+        self.df = processar_coluna(self.df, "receita_total",
+                                   lambda x: round(x / 1000, 2),
+                                   nome_saida="receita_em_milhares")
+        self.df = processar_coluna(self.df, "quantidade",
+                                   lambda q: "Alto Volume" if q > 5 else "Baixo Volume",
+                                   nome_saida="perfil_volume")
+        print("\nColunas apos a transformacao:")
+        print(list(self.df.columns))
+        return self.df
+
+    def analisar(self):
+        """Calcula metricas, segmenta clientes e monta as estatisticas."""
+        print("\n[3] Analise")
+        self.metricas = calcular_metricas(self.df)
+        mostrar_metricas(self.metricas)
+        self.clientes = segmentar_clientes(self.df)
+        self.estatisticas = calcular_estatisticas(self.df, self.metricas, self.clientes)
+        return self.metricas
+
+    def visualizar(self):
+        """Gera as quatro figuras obrigatorias."""
+        print("\n[4] Visualizacoes")
+        configurar_estilo()
+        self.graficos = [
+            grafico_receita_por_mes(self.metricas["por_mes"]),
+            grafico_top_produtos(self.metricas["top_produtos"]),
+            grafico_quantidade_vs_receita(self.df),
+            grafico_painel_resumo(self.df, self.metricas),
+        ]
+        return self.graficos
+
+    def resumo(self):
+        """Exporta os arquivos e imprime os principais insights para a diretoria."""
+        print("\n[5] Exportacao e resumo")
+        exportar_resultados(self.metricas, self.clientes, self.estatisticas, self.pasta_saida)
+
+        por_mes = self.metricas["por_mes"]
+        melhor_mes = por_mes.loc[por_mes["receita_total"].idxmax()]
+        pior_mes = por_mes.loc[por_mes["receita_total"].idxmin()]
+        melhor_regiao = self.metricas["por_regiao"].iloc[0]
+        melhor_produto = self.metricas["top_produtos"].iloc[0]
+        melhor_categoria = self.metricas["por_categoria"].iloc[0]
+
+        print("\n=== INSIGHTS PARA A REUNIAO TRIMESTRAL ===")
+        print(f"Receita total do ano: {moeda(self.estatisticas['receita_total'])}")
+        print(f"Melhor mes: {melhor_mes['mes_nome']} ({moeda(melhor_mes['receita_total'])})")
+        print(f"Pior mes: {pior_mes['mes_nome']} ({moeda(pior_mes['receita_total'])})")
+        print(f"Produto lider: {melhor_produto['produto']} ({moeda(melhor_produto['receita_total'])})")
+        print(f"Categoria lider: {melhor_categoria['categoria']}")
+        print(f"Regiao lider: {melhor_regiao['regiao']} "
+              f"(ticket medio {moeda(melhor_regiao['ticket_medio'])})")
+        print(f"Clientes Ouro: {self.estatisticas['clientes_ouro']} "
+              f"de {self.estatisticas['clientes_unicos']}")
+        print(f"Projecao do proximo mes (media movel): "
+              f"{moeda(self.estatisticas['projecao_proximo_mes_media_movel'])} "
+              f"- tendencia de {self.estatisticas['tendencia_proximo_mes']}")
+        return self.estatisticas
+
+
+# ----------------------------------------------------------------------
+# RF10 - Ponto de entrada
+# ----------------------------------------------------------------------
+def main():
+    """Executa o fluxo completo do SalesInsight PY."""
+    print("=" * 60)
+    print("   SALESINSIGHT PY - Analise de Dados de Vendas")
+    print("=" * 60)
+
+    # Etapa 0 - garantir a existencia do dataset
+    if not os.path.exists(CAMINHO_CSV):
+        gerar_dataset_vendas().to_csv(CAMINHO_CSV, index=False)
+        print(f"Dataset gerado: {CAMINHO_CSV}")
+
+    # Etapas 1 a 5 - fluxo pela classe (limpeza sempre antes dos graficos)
+    analisador = AnalisadorDeVendas()
+    analisador.carregar(CAMINHO_CSV)
+    inspecionar_dados(analisador.df_bruto)
+    analisador.transformar()
+    analisador.analisar()
+    analisador.visualizar()
+    analisador.resumo()
+
+    print("\n[CONCLUIDO] Fluxo finalizado com sucesso.")
+
+
+if __name__ == "__main__":
+    main()
