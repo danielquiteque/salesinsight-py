@@ -177,3 +177,181 @@ def tratar_dados(df):
     print(f"Registros finais:                     {relatorio['registros_finais']}")
 
     return df, relatorio
+
+
+# ----------------------------------------------------------------------
+# RF04 - Colunas derivadas e transformacao condicional
+# ----------------------------------------------------------------------
+def criar_colunas_derivadas(df):
+    """Cria receita_total, mes, mes_nome, trimestre, ano e faixa_receita_item."""
+    df = df.copy()
+
+    # operacao vetorizada: multiplica as duas colunas inteiras de uma vez
+    df["receita_total"] = (df["quantidade"] * df["preco_unitario"]).round(2)
+
+    # componentes de data com o acessor .dt
+    df["mes"] = df["data_venda"].dt.month
+    df["mes_nome"] = df["mes"].map(MESES_PT)
+    df["trimestre"] = "Q" + df["data_venda"].dt.quarter.astype(str)
+    df["ano"] = df["data_venda"].dt.year
+
+    # transformacao condicional vetorizada com df.loc[condicao, coluna]
+    condicoes = [
+        df["receita_total"] < 500,
+        (df["receita_total"] >= 500) & (df["receita_total"] < 5000),
+        df["receita_total"] >= 5000,
+    ]
+    faixas = ["Baixo Valor", "Medio Valor", "Alto Valor"]
+    df["faixa_receita_item"] = "Nao Classificado"
+    for condicao, faixa in zip(condicoes, faixas):
+        df.loc[condicao, "faixa_receita_item"] = faixa
+
+    return df
+
+
+# ----------------------------------------------------------------------
+# RF08 - Funcao de ordem superior (recebe outra funcao como argumento)
+# ----------------------------------------------------------------------
+def processar_coluna(df, coluna, funcao_transformacao, nome_saida=None):
+    """
+    Aplica uma funcao de transformacao a uma coluna do DataFrame.
+    Demonstra o uso de funcoes como argumento.
+    """
+    nome_saida = nome_saida or f"{coluna}_transformado"
+    df[nome_saida] = df[coluna].apply(funcao_transformacao)
+    return df
+
+
+# ----------------------------------------------------------------------
+# RF05 - Metricas agregadas com groupby
+# ----------------------------------------------------------------------
+def calcular_metricas(df):
+    """
+    Calcula as metricas agregadas do dataset.
+    Retorna um dicionario no formato {nome_da_metrica: DataFrame}.
+    """
+    metricas = {}
+
+    metricas["por_mes"] = (
+        df.groupby(["mes", "mes_nome"])
+        .agg(receita_total=("receita_total", "sum"),
+             quantidade=("quantidade", "sum"),
+             n_vendas=("id_venda", "count"))
+        .reset_index()
+        .sort_values("mes")
+    )
+
+    metricas["por_trimestre"] = (
+        df.groupby("trimestre")
+        .agg(receita_total=("receita_total", "sum"),
+             n_vendas=("id_venda", "count"))
+        .reset_index()
+    )
+
+    metricas["top_produtos"] = (
+        df.groupby("produto")["receita_total"].sum()
+        .sort_values(ascending=False)
+        .head(5)
+        .reset_index()
+    )
+
+    metricas["por_categoria"] = (
+        df.groupby("categoria")["receita_total"].sum()
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+
+    metricas["por_regiao"] = (
+        df.groupby("regiao")
+        .agg(receita_total=("receita_total", "sum"),
+             ticket_medio=("receita_total", "mean"),
+             n_vendas=("id_venda", "count"))
+        .sort_values("receita_total", ascending=False)
+        .reset_index()
+    )
+
+    # Bonus B03 - tabela cruzada mes x categoria com pivot_table
+    metricas["mes_x_categoria"] = df.pivot_table(
+        index="mes_nome", columns="categoria", values="receita_total",
+        aggfunc="sum", fill_value=0, sort=False,
+    ).reindex([MESES_PT[m] for m in sorted(df["mes"].unique())])
+
+    return metricas
+
+
+def mostrar_metricas(metricas):
+    """Imprime cada tabela do dicionario de metricas de forma legivel."""
+    for nome, tabela in metricas.items():
+        print(f"\n=== {nome.upper().replace('_', ' ')} ===")
+        print(tabela.round(2).to_string(index=(nome == "mes_x_categoria")))
+    return metricas
+
+
+# ----------------------------------------------------------------------
+# RF06 - Segmentacao de clientes por nivel de gasto
+# ----------------------------------------------------------------------
+def segmentar_clientes(df):
+    """
+    Agrupa por cliente, soma a receita e classifica em
+    Bronze / Prata / Ouro.
+    Retorna um DataFrame com: cliente, total_gasto, segmento.
+    """
+    clientes = (
+        df.groupby("cliente")["receita_total"].sum()
+        .reset_index()
+        .rename(columns={"receita_total": "total_gasto"})
+        .sort_values("total_gasto", ascending=False)
+    )
+
+    # funcao lambda aplicada com .apply()
+    clientes["segmento"] = clientes["total_gasto"].apply(
+        lambda valor: "Bronze" if valor < 5000 else ("Prata" if valor <= 15000 else "Ouro")
+    )
+
+    print("\n=== TOP 10 CLIENTES ===")
+    print(clientes.head(10).round(2).to_string(index=False))
+    print("\n=== CLIENTES POR SEGMENTO ===")
+    print(clientes["segmento"].value_counts().to_string())
+
+    return clientes
+
+
+# ----------------------------------------------------------------------
+# Estatisticas gerais e projecao simples (bonus B01 e B05)
+# ----------------------------------------------------------------------
+def descrever_tendencia(variacao_percentual):
+    """Traduz a variacao percentual em uma palavra (if / elif / else)."""
+    if variacao_percentual > 5:
+        return "alta"
+    elif variacao_percentual < -5:
+        return "queda"
+    else:
+        return "estavel"
+
+
+def calcular_estatisticas(df, metricas, clientes, janela=3):
+    """
+    Monta um dicionario com os numeros gerais do periodo.
+    Inclui quartis da receita por venda (B05) e uma projecao do proximo
+    mes pela media movel dos ultimos `janela` meses (B01).
+    """
+    por_mes = metricas["por_mes"]
+    media_movel = por_mes["receita_total"].rolling(window=janela).mean()
+    ultimo_mes = por_mes["receita_total"].iloc[-1]
+    projecao = media_movel.iloc[-1]
+    variacao = (projecao - ultimo_mes) / ultimo_mes * 100
+
+    estatisticas = {
+        "receita_total": df["receita_total"].sum(),
+        "quantidade_total": df["quantidade"].sum(),
+        "numero_de_vendas": len(df),
+        "ticket_medio": df["receita_total"].mean(),
+        "clientes_unicos": df["cliente"].nunique(),
+        "clientes_ouro": (clientes["segmento"] == "Ouro").sum(),
+        "receita_q1_quartil_25": df["receita_total"].quantile(0.25),
+        "receita_mediana": df["receita_total"].quantile(0.50),
+        "receita_q3_quartil_75": df["receita_total"].quantile(0.75),
+        "projecao_proximo_mes_media_movel": projecao,
+        "tendencia_proximo_mes": descrever_tendencia(variacao),
+    }
+    return estatisticas
