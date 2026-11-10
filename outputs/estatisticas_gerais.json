@@ -1,0 +1,13 @@
+{
+    "receita_total": 1380210.31,
+    "quantidade_total": 1035,
+    "numero_de_vendas": 194,
+    "ticket_medio": 7114.49,
+    "clientes_unicos": 49,
+    "clientes_ouro": 35,
+    "receita_q1_quartil_25": 1028.18,
+    "receita_mediana": 3747.25,
+    "receita_q3_quartil_75": 10399.15,
+    "projecao_proximo_mes_media_movel": 118791.34,
+    "tendencia_proximo_mes": "alta"
+}
