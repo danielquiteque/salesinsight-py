@@ -355,3 +355,113 @@ def calcular_estatisticas(df, metricas, clientes, janela=3):
         "tendencia_proximo_mes": descrever_tendencia(variacao),
     }
     return estatisticas
+
+
+# ----------------------------------------------------------------------
+# RF07 - Visualizacoes com Matplotlib e Seaborn
+# ----------------------------------------------------------------------
+def configurar_estilo():
+    """Define o visual global dos graficos."""
+    sns.set_theme(style="whitegrid")
+    plt.rcParams["figure.figsize"] = (12, 6)
+    plt.rcParams["axes.titlesize"] = 14
+    plt.rcParams["axes.titleweight"] = "bold"
+    plt.rcParams["axes.labelsize"] = 11
+
+
+def formatar_reais(valor, _posicao=None):
+    """Formata o eixo em reais: 120000 -> 'R$ 120 mil'."""
+    if abs(valor) >= 1000:
+        return f"R$ {valor / 1000:,.0f} mil".replace(",", ".")
+    return f"R$ {valor:,.0f}"
+
+
+def salvar_figura(fig, nome_arquivo, pasta=PASTA_GRAFICOS, dpi=150):
+    """Ajusta o layout, salva o PNG e fecha a figura. Retorna o caminho."""
+    os.makedirs(pasta, exist_ok=True)
+    caminho = os.path.join(pasta, nome_arquivo)
+    plt.tight_layout()
+    fig.savefig(caminho, dpi=dpi)
+    plt.close(fig)
+    print(f"Grafico salvo: {caminho}")
+    return caminho
+
+
+def desenhar_linha_receita(ax, por_mes, janela=3):
+    """Linha da receita mensal + media movel (duas series, por isso a legenda)."""
+    rotulos = por_mes["mes_nome"].str[:3]
+    ax.plot(rotulos, por_mes["receita_total"], marker="o", linewidth=2.5,
+            color=COR_PRINCIPAL, label="Receita mensal")
+    ax.plot(rotulos, por_mes["receita_total"].rolling(window=janela).mean(),
+            linestyle="--", linewidth=2, color=COR_DESTAQUE,
+            label=f"Media movel ({janela} meses)")
+    ax.set_title("Receita Total por Mes - 2025")
+    ax.set_xlabel("Mes")
+    ax.set_ylabel("Receita Total")
+    ax.yaxis.set_major_formatter(FuncFormatter(formatar_reais))
+    ax.legend()
+
+
+def desenhar_barras_produtos(ax, top_produtos):
+    """Barras horizontais do Top 5 produtos por receita."""
+    sns.barplot(data=top_produtos, y="produto", x="receita_total",
+                hue="produto", legend=False, palette=CORES_BARRAS, ax=ax)
+    ax.set_title("Top 5 Produtos por Receita")
+    ax.set_xlabel("Receita Total")
+    ax.set_ylabel("Produto")
+    ax.xaxis.set_major_formatter(FuncFormatter(formatar_reais))
+
+
+def desenhar_dispersao(ax, df):
+    """Dispersao quantidade x receita por transacao, uma cor por categoria."""
+    for categoria, cor in CORES_CATEGORIA.items():
+        dados = df[df["categoria"] == categoria]  # filtro booleano
+        ax.scatter(dados["quantidade"], dados["receita_total"], color=cor,
+                   alpha=0.75, s=55, edgecolor="white", label=categoria)
+    ax.set_title("Quantidade x Receita por Transacao")
+    ax.set_xlabel("Quantidade vendida (unidades)")
+    ax.set_ylabel("Receita da transacao")
+    ax.yaxis.set_major_formatter(FuncFormatter(formatar_reais))
+    ax.legend(title="Categoria")
+
+
+def desenhar_barras_regiao(ax, por_regiao):
+    """Barras verticais da receita por regiao."""
+    ax.bar(por_regiao["regiao"], por_regiao["receita_total"], color=CORES_BARRAS)
+    ax.set_title("Receita por Regiao")
+    ax.set_xlabel("Regiao")
+    ax.set_ylabel("Receita Total")
+    ax.yaxis.set_major_formatter(FuncFormatter(formatar_reais))
+
+
+def grafico_receita_por_mes(por_mes):
+    """Figura 1 - linha."""
+    fig, ax = plt.subplots(figsize=(12, 6))
+    desenhar_linha_receita(ax, por_mes)
+    return salvar_figura(fig, "receita_por_mes.png")
+
+
+def grafico_top_produtos(top_produtos):
+    """Figura 2 - barras."""
+    fig, ax = plt.subplots(figsize=(11, 6))
+    desenhar_barras_produtos(ax, top_produtos)
+    return salvar_figura(fig, "top_produtos.png")
+
+
+def grafico_quantidade_vs_receita(df):
+    """Figura 3 - dispersao."""
+    fig, ax = plt.subplots(figsize=(11, 7))
+    desenhar_dispersao(ax, df)
+    return salvar_figura(fig, "quantidade_vs_receita.png")
+
+
+def grafico_painel_resumo(df, metricas):
+    """Figura 4 - painel 2x2 com os eixos acessados um a um."""
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    desenhar_linha_receita(axes[0, 0], metricas["por_mes"])
+    desenhar_barras_produtos(axes[0, 1], metricas["top_produtos"])
+    desenhar_dispersao(axes[1, 0], df)
+    desenhar_barras_regiao(axes[1, 1], metricas["por_regiao"])
+    fig.suptitle("SalesInsight PY - Painel Resumo de Vendas 2025",
+                 fontsize=18, fontweight="bold", color=COR_PRINCIPAL)
+    return salvar_figura(fig, "painel_resumo.png")
